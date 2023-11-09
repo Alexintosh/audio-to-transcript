@@ -18,7 +18,7 @@ class AudioProcessor:
         self.segments = []
         self.transcripts = []
         self.ten_minutes = 10 * 60 * 1000  # 10 minutes in milliseconds
-        self.output_directory = self.create_output_directory()
+        self.output_directory = self.get_output_directory()
         self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))  # Load API key from environment
         
     def load_audio(self):
@@ -29,12 +29,30 @@ class AudioProcessor:
             logging.error(f"Failed to load audio file: {e}")
             sys.exit(1)
     
-    def create_output_directory(self):
+    def get_output_directory(self):
+        """Get the output directory, prompt for overwrite if necessary."""
         original_file_name = os.path.splitext(os.path.basename(self.file_path))[0]
         output_directory = os.path.join(os.getcwd(), original_file_name)
+        
+        # Check if the output directory already exists
+        if os.path.exists(output_directory) and os.listdir(output_directory):
+            # Prompt the user for confirmation to overwrite
+            response = input(f"The directory {output_directory} already exists and may contain data. Overwrite? (y/n): ").strip().lower()
+            if response != 'y':
+                output_directory = self.create_new_output_directory(original_file_name)
+        
         os.makedirs(output_directory, exist_ok=True)
-        logging.info(f"Output directory created: {output_directory}")
         return output_directory
+
+    def create_new_output_directory(self, base_name):
+        """Create a new output directory to avoid overwriting existing files."""
+        counter = 1
+        new_output_directory = os.path.join(os.getcwd(), f"{base_name}_{counter}")
+        while os.path.exists(new_output_directory) and os.listdir(new_output_directory):
+            counter += 1
+            new_output_directory = os.path.join(os.getcwd(), f"{base_name}_{counter}")
+        logging.info(f"New output directory created: {new_output_directory}")
+        return new_output_directory
 
     def split_audio(self):
         for i in range(0, len(self.audio), self.ten_minutes):

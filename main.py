@@ -1,92 +1,89 @@
-from openai import OpenAI
-from pydub import AudioSegment
 import os
 import sys
 import logging
+from pydub import AudioSegment
+from openai import OpenAI
+from dotenv import load_dotenv
 
-client = OpenAI()
-
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-if len(sys.argv) < 2:
-    logging.error("You must provide the path to the audio file as an argument")
-    sys.exit(1)
-
-# The first command line arg is the path to the audio file
-path_to_audio_file = sys.argv[1]
-logging.info(f"Processing file: {path_to_audio_file}")
-
-# Load the audio file
-try:
-    audio = AudioSegment.from_file(path_to_audio_file)
-    logging.info("Audio file loaded")
-except Exception as e:
-    logging.error(f"Failed to load audio file: {e}")
-    sys.exit(1)
-
-
-# Define the length of each split in milliseconds
-ten_minutes = 10 * 60 * 1000
-
-# Extract the original file name without the extension
-original_file_name = os.path.splitext(os.path.basename(path_to_audio_file))[0]
-
-# Create a directory for the original file name if it doesn't exist
-output_directory = os.path.join(os.getcwd(), original_file_name)
-os.makedirs(output_directory, exist_ok=True)
-logging.info(f"Output directory created: {output_directory}")
-
-# Initialize an empty list to hold all transcripts
-transcripts = []
-
-# Loop over the audio in 10-minute increments
-for i in range(0, len(audio), ten_minutes):
-    segment_index = i // ten_minutes
-    logging.info(f"Processing segment: {segment_index}")
+class AudioProcessor:
+    def __init__(self, file_path):
+        self.file_path = file_path
+        self.audio = None
+        self.segments = []
+        self.transcripts = []
+        self.ten_minutes = 10 * 60 * 1000  # 10 minutes in milliseconds
+        self.output_directory = self.create_output_directory()
+        self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))  # Load API key from environment
+        
+    def load_audio(self):
+        try:
+            self.audio = AudioSegment.from_file(self.file_path)
+            logging.info("Audio file loaded")
+        except Exception as e:
+            logging.error(f"Failed to load audio file: {e}")
+            sys.exit(1)
     
-    # Extract the 10-minute segment
-    segment = audio[i:i+ten_minutes]
+    def create_output_directory(self):
+        original_file_name = os.path.splitext(os.path.basename(self.file_path))[0]
+        output_directory = os.path.join(os.getcwd(), original_file_name)
+        os.makedirs(output_directory, exist_ok=True)
+        logging.info(f"Output directory created: {output_directory}")
+        return output_directory
+
+    def split_audio(self):
+        for i in range(0, len(self.audio), self.ten_minutes):
+            segment_index = i // self.ten_minutes
+            logging.info(f"Processing segment: {segment_index}")
+            segment = self.audio[i:i + self.ten_minutes]
+            self.segments.append((segment_index, segment))
+
+    def save_segments(self):
+        for index, segment in self.segments:
+            segment_file_name = f"{os.path.splitext(os.path.basename(self.file_path))[0]}_segment_{index}.mp3"
+            segment_file_path = os.path.join(self.output_directory, segment_file_name)
+            segment.export(segment_file_path, format="mp3")
+            logging.info(f"Segment saved: {segment_file_path}")
+
+    def transcribe_segments(self):
+        for index, _ in self.segments:
+            segment_file_name = f"{os.path.splitext(os.path.basename(self.file_path))[0]}_segment_{index}.mp3"
+            segment_file_path = os.path.join(self.output_directory, segment_file_name)
+            try:
+                with open(segment_file_path, "rb") as audio_segment:
+                    response = self.client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_segment
+                    )
+                    # Assuming the response contains a 'text' attribute with the transcription
+                    transcript = response['text'] if 'text' in response else ""
+                    logging.info(f"Transcription completed for segment: {index}")
+                    self.transcripts.append(transcript)
+            except Exception as e:
+                logging.error(f"Transcription failed for segment {index}: {e}")
+                self.transcripts.append("")  # Append an empty string if transcription fails
+
+    def save_transcripts(self):
+        full_transcript = "\n".join(self.transcripts)
+        transcript_file_path = os.path.join(self.output_directory, f"{os.path.splitext(os.path.basename(self.file_path))[0]}_transcript.txt")
+        with open(transcript_file_path, 'w') as transcript_file:
+            transcript_file.write(full_transcript)
+        logging.info(f"Full transcript saved: {transcript_file_path}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        logging.error("You must provide the path to the audio file as an argument")
+        sys.exit(1)
     
-    # Construct the new file name
-    segment_file_name = f"{original_file_name}_segment_{segment_index}.mp3"
-    
-    # Path for the new file
-    segment_file_path = os.path.join(output_directory, segment_file_name)
-    
-    # Save the segment in the new directory
-    segment.export(segment_file_path, format="mp3")
-    logging.info(f"Segment saved: {segment_file_path}")
-    
-    # Call the Whisper API for transcription (pseudo-code, replace with actual code)
-    # Make sure to include error handling here
-    try:
-        # This is a placeholder for the transcription code.
-        # You would have to replace this with the actual call to the Whisper API.
-        logging.info(f"Starting Transcription for segment: {segment_index}")
-        audio_segment = open(segment_file_path, "rb")
-        transcript = client.audio.transcriptions.create(
-            model="whisper-1", 
-            file=audio_segment
-        )
-        logging.info(f"Transcription completed for segment: {segment_index}")
-    except Exception as e:
-        logging.error(f"Transcription failed for segment {segment_index}: {e}")
-        transcript = ""
-
-    # Append the transcript to the transcripts list
-    transcripts.append(transcript.text)
-
-# Join all transcripts into a single text
-full_transcript = "\n".join(transcripts)
-
-# Save the full transcript into a single text file
-transcript_file_path = os.path.join(output_directory, f"{original_file_name}_transcript.txt")
-with open(transcript_file_path, 'w') as transcript_file:
-    transcript_file.write(full_transcript)
-logging.info(f"Full transcript saved: {transcript_file_path}")
-
-
-
-# print(transcript)
+    audio_file_path = sys.argv[1]
+    processor = AudioProcessor(audio_file_path)
+    processor.load_audio()
+    processor.split_audio()
+    processor.save_segments()
+    processor.transcribe_segments()
+    processor.save_transcripts()
